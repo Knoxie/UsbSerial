@@ -2,11 +2,6 @@ package com.felhr.usbserial;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.felhr.deviceids.CH34xIds;
-import com.felhr.deviceids.CP210xIds;
-import com.felhr.deviceids.FTDISioIds;
-import com.felhr.deviceids.PL2303Ids;
-
 import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
@@ -14,22 +9,27 @@ import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbRequest;
 
+import com.felhr.deviceids.CH34xIds;
+import com.felhr.deviceids.CP210xIds;
+import com.felhr.deviceids.FTDISioIds;
+import com.felhr.deviceids.PL2303Ids;
+
 public abstract class UsbSerialDevice implements UsbSerialInterface
 {
 	private static final String CLASS_ID = UsbSerialDevice.class.getSimpleName();
-	
+
 	private static boolean mr1Version;
 	protected final UsbDevice device;
 	protected final UsbDeviceConnection connection;
-	
+
 	protected static final int USB_TIMEOUT = 5000;
-	
+
 	protected SerialBuffer serialBuffer;
-	
+
 	protected WorkerThread workerThread;
 	protected WriteThread writeThread;
 	protected ReadThread readThread;
-	
+
 	// Get Android version if version < 4.2 It is not going to be asynchronous read operations
 	static
 	{
@@ -38,7 +38,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		else
 			mr1Version = false;
 	}
-	
+
 	public UsbSerialDevice(UsbDevice device, UsbDeviceConnection connection)
 	{
 		this.device = device;
@@ -55,7 +55,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		writeThread = new WriteThread();
 		writeThread.start();
 	}
-	
+
 	public static UsbSerialDevice createUsbSerialDevice(UsbDevice device, UsbDeviceConnection connection)
 	{
 		return createUsbSerialDevice(device, connection, -1);
@@ -70,7 +70,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		 */
 		int vid = device.getVendorId();
 		int pid = device.getProductId();
-		
+
 		if(FTDISioIds.isDeviceSupported(vid, pid))
 			return new FTDISerialDevice(device, connection, iface);
 		else if(CP210xIds.isDeviceSupported(vid, pid))
@@ -84,17 +84,17 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		else 
 			return null;
 	}
-	
+
 	// Common Usb Serial Operations (I/O Asynchronous)
 	@Override
 	public abstract boolean open();
-	
+
 	@Override
 	public void write(byte[] buffer)
 	{
 		serialBuffer.putWriteBuffer(buffer);
 	}
-	
+
 	@Override
 	public int read(UsbReadCallback mCallback)
 	{
@@ -109,11 +109,11 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		}
 		return 0;
 	}
-	
-	
+
+
 	@Override
 	public abstract void close();
-	
+
 	// Serial port configuration
 	@Override
 	public abstract void setBaudRate(int baudRate);
@@ -125,19 +125,19 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 	public abstract void setParity(int parity);
 	@Override
 	public abstract void setFlowControl(int flowControl);
-	
+
 	//Debug options
 	public void debug(boolean value)
 	{
 		if(serialBuffer != null)
 			serialBuffer.debug(value);
 	}
-	
+
 	private boolean isFTDIDevice()
 	{
 		return (this instanceof FTDISerialDevice);
 	}
-	
+
 	public static boolean isCdcDevice(UsbDevice device)
 	{
 		int iIndex = device.getInterfaceCount();
@@ -149,8 +149,8 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		}
 		return false;
 	}
-	
-	
+
+
 	/*
 	 * WorkerThread waits for request notifications from IN endpoint
 	 */
@@ -159,12 +159,12 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 		private UsbReadCallback callback;
 		private UsbRequest requestIN;
 		private AtomicBoolean working;
-		
+
 		public WorkerThread()
 		{
 			working = new AtomicBoolean(true);
 		}
-		
+
 		@Override
 		public void run()
 		{
@@ -175,7 +175,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 						&& request.getEndpoint().getDirection() == UsbConstants.USB_DIR_IN)
 				{
 					byte[] data = serialBuffer.getDataReceived();
-					
+
 					// FTDI devices reserves two first bytes of an IN endpoint with info about
 					// modem and Line.
 					if(isFTDIDevice())
@@ -198,94 +198,101 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 				}
 			}
 		}
-		
+
 		public void setCallback(UsbReadCallback callback)
 		{
 			this.callback = callback;
 		}
-		
+
 		public void setUsbRequest(UsbRequest request)
 		{
 			this.requestIN = request;
 		}
-		
+
 		public UsbRequest getUsbRequest()
 		{
 			return requestIN;
 		}
-		
+
 		private void onReceivedData(byte[] data)
 		{
 			callback.onReceivedData(data);
 		}
-		
+
 		public void stopWorkingThread()
 		{
 			working.set(false);
 		}
 	}
-	
+
 	protected class WriteThread extends Thread
 	{
 		private UsbEndpoint outEndpoint;
 		private AtomicBoolean working;
-		
+
 		public WriteThread()
 		{
 			working = new AtomicBoolean(true);
 		}
-		
+
 		@Override
 		public void run()
 		{
 			while(working.get())
 			{
+				try{
 				byte[] data = serialBuffer.getWriteBuffer();
-				connection.bulkTransfer(outEndpoint, data, data.length, USB_TIMEOUT);
+				if(connection != null)
+					connection.bulkTransfer(outEndpoint, data, data.length, USB_TIMEOUT);
+				}catch(Exception e){
+					killWorkingThread();
+					close();
+					killWriteThread();
+				}
 			}
 		}
-		
+
 		public void setUsbEndpoint(UsbEndpoint outEndpoint)
 		{
 			this.outEndpoint = outEndpoint;
 		}
-		
+
 		public void stopWriteThread()
 		{
 			working.set(false);
 		}
 	}
-	
+
 	protected class ReadThread extends Thread
 	{
 		private UsbReadCallback callback;
 		private UsbEndpoint inEndpoint;
 		private AtomicBoolean working;
-		
+
 		public ReadThread()
 		{
 			working = new AtomicBoolean(true);
 		}
-		
+
 		public void setCallback(UsbReadCallback callback)
 		{
 			this.callback = callback;
 		}
-		
+
 		@Override
 		public void run()
 		{
 			byte[] dataReceived = null;
-			
+
 			while(working.get())
 			{
 				int numberBytes = connection.bulkTransfer(inEndpoint, serialBuffer.getBufferCompatible(),
 						SerialBuffer.DEFAULT_READ_BUFFER_SIZE, 0);
-				
+
 				if(numberBytes > 0)
 				{
 					dataReceived = serialBuffer.getDataReceivedCompatible(numberBytes);
-					
+
 					// FTDI devices reserves two first bytes of an IN endpoint with info about
 					// modem and Line.
 					if(isFTDIDevice())
@@ -302,18 +309,18 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 				}
 			}
 		}
-		
+
 		public void setUsbEndpoint(UsbEndpoint inEndpoint)
 		{
 			this.inEndpoint = inEndpoint;
 		}
-		
+
 		public void stopReadThread()
 		{
 			working.set(false);
 		}
 	}
-	
+
 	protected void setThreadsParams(UsbRequest request, UsbEndpoint endpoint)
 	{
 		if(mr1Version)
@@ -326,7 +333,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 			writeThread.setUsbEndpoint(endpoint);
 		}
 	}
-	
+
 	/*
 	 * Kill workingThread; This must be called when closing a device
 	 */
@@ -342,7 +349,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 			readThread = null;
 		}
 	}
-	
+
 	/*
 	 * Restart workingThread if it has been killed before
 	 */
@@ -358,7 +365,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 			readThread.start();
 		}
 	}
-	
+
 	protected void killWriteThread()
 	{
 		if(writeThread != null)
@@ -368,7 +375,7 @@ public abstract class UsbSerialDevice implements UsbSerialInterface
 			serialBuffer.resetWriteBuffer();
 		}
 	}
-	
+
 	protected void restartWriteThread()
 	{
 		if(writeThread == null)
